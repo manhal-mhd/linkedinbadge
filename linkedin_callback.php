@@ -45,7 +45,7 @@ try {
     if ($result) {
         \local_linkedinbadge\logger::log('LinkedIn Connection Successful');
         redirect(
-            new moodle_url('/local/linkedinbadge/your_desired_page.php'), // Update this line
+            new moodle_url('/local/linkedinbadge/post_badge.php'), // Update this line
             get_string('success:connection', 'local_linkedinbadge'),
             null,
             \core\output\notification::NOTIFY_SUCCESS
@@ -61,7 +61,7 @@ try {
         'trace' => $e->getTraceAsString()
     ]);
     redirect(
-        new moodle_url('/local/linkedinbadge/your_desired_page.php'), // Update this line
+        new moodle_url('/local/linkedinbadge/share_badge.php'), // Update this line
         $e->getMessage(),
         null,
         \core\output\notification::NOTIFY_ERROR
@@ -72,7 +72,7 @@ try {
         'trace' => $e->getTraceAsString()
     ]);
     redirect(
-        new moodle_url('/local/linkedinbadge/your_desired_page.php'), // Update this line
+        new moodle_url('/local/linkedinbadge/share_badge.php'), // Update this line
         get_string('error:unexpected', 'local_linkedinbadge', $e->getMessage()),
         null,
         \core\output\notification::NOTIFY_ERROR

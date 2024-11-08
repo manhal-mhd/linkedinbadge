@@ -1,6 +1,4 @@
 <?php
-// '->dirroot . '/local/linkedinbadge/classes/linkedin_oauth.php
-
 namespace local_linkedinbadge;
 
 defined('MOODLE_INTERNAL') || die();
@@ -16,7 +14,7 @@ class linkedin_oauth {
         global $CFG;
         $this->client_id = get_config('local_linkedinbadge', 'linkedin_client_id');
         $this->client_secret = get_config('local_linkedinbadge', 'linkedin_client_secret');
-        $this->redirect_uri = ''->wwwroot . '/local/linkedinbadge/linkedin_callback.php';
+        $this->redirect_uri = $CFG->wwwroot . '/local/linkedinbadge/linkedin_callback.php';
     }
 
     public function get_auth_url() {

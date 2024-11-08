@@ -170,7 +170,7 @@ global $DB, $USER, $OUTPUT, $PAGE;
 
 $PAGE->set_context(context_system::instance());
 $PAGE->set_url(new moodle_url('/local/linkedinbadge/post_badge.php'));
-$PAGE->set_title(get_string('share_linkedin', 'local_linkedinbadge'));
+$PAGE->set_title(get_string('share_on_linkedin', 'local_linkedinbadge'));
 
 // Add detailed debugging
 error_reporting(E_ALL);

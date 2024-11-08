@@ -26,7 +26,10 @@ $string['linkedin_not_connected'] = 'LinkedIn account not connected';
 $string['connection_status'] = 'LinkedIn Connection Status';
 
 // Default message template
+//$string['default_share_message'] = 'I\'m proud to announce that I\'ve earned the {$a->badge} badge from {$a->site}! 🏆
+#{$a->description}';
 $string['default_share_message'] = 'I\'m proud to announce that I\'ve earned the {$a->badge} badge from {$a->site}! 🏆
+Check out my achievement here: {$a->url}
 {$a->description}';
 
 // Success messages
@@ -49,6 +52,8 @@ $string['try_again'] = 'Try Again';
 $string['share_button'] = 'Share to LinkedIn';
 $string['message_label'] = 'Your Message';
 $string['cancel'] = 'Cancel';
+//$string['share_linkedin'] = 'Share on LinkedIn';
+$string['share_on_linkedin'] = 'Share on LinkedIn';
 
 // Admin interface
 $string['manage_connections'] = 'Manage LinkedIn Connections';
