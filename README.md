@@ -21,6 +21,16 @@ linkedinbadge/
 ├── share_badge.php     # Badge sharing interface
 └── version.php        # Plugin version info
 ```
+## Prerequisites
+
+### Database Adjustment
+Before installation, you need to modify your Moodle database to support LinkedIn tokens:
+
+```sql
+ALTER TABLE mdl_user_preferences MODIFY value TEXT;
+```
+
+This modification is necessary because LinkedIn tokens can exceed the default field length.
 
 ## Requirements
 - Moodle 4.0 or higher
@@ -67,10 +77,12 @@ chmod -R 755 linkedinbadge
      ```
      https://your-moodle-domain/local/linkedinbadge/linkedin_callback.php
      ```
-   - Request these OAuth 2.0 Scopes:
-     - r_liteprofile
+    Required Scopes:
+     - openid
+     - profile
+     - email
      - w_member_social
-
+     ```
 3. Get Credentials:
    - Note your Client ID
    - Note your Client Secret
@@ -169,9 +181,8 @@ http://www.gnu.org/copyleft/gpl.html
 
 ## Credits
 
-Developed by: [Your Name/Organization]
+Developed by: [Manhal.Mohammed]
 Version: 1.0.0
-Release Date: [Release Date]
 
 ## Version History
 
