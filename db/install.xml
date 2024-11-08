@@ -1,10 +1,7 @@
 <?xml version="1.0" encoding="UTF-8" ?>
-<XMLDB PATH="local/linkedinbadge/db" VERSION="20240107" COMMENT="XMLDB file for LinkedIn Badge Share tables"
-    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
-    xsi:noNamespaceSchemaLocation="../../../lib/xmldb/xmldb.xsd"
->
+<XMLDB PATH="local/linkedinbadge/db" VERSION="20240107" COMMENT="XMLDB file for LinkedIn Badge Share plugin">
     <TABLES>
-        <TABLE NAME="local_octalearn_badges" COMMENT="Custom badge data for Octalearn">
+        <TABLE NAME="local_linkedinbadge_badges" COMMENT="Custom badge data for LinkedIn Badge Share">
             <FIELDS>
                 <FIELD NAME="id" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="true"/>
                 <FIELD NAME="badgeid" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0"/>
