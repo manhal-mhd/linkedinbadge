@@ -229,6 +229,31 @@ function upload_image_to_linkedin($token, $image_path, $linkedin_person_id) {
         $response_data = json_decode($response, true);
         $upload_url = $response_data['value']['uploadMechanism']['com.linkedin.digitalmedia.uploading.MediaUploadHttpRequest']['uploadUrl'];
         $asset = $response_data['value']['asset'];
+            curl_close($ch);
+
+            if ($http_code !== 200) {
+                $response_data = json_decode($response, true);
+                $expired = false;
+                if ($http_code === 401) {
+                    $expired = true;
+                }
+                if (!$expired && is_array($response_data)) {
+                    if (!empty($response_data['serviceErrorCode']) && $response_data['serviceErrorCode'] == 65602) {
+                        $expired = true;
+                    }
+                    if (!empty($response_data['code']) && $response_data['code'] === 'EXPIRED_ACCESS_TOKEN') {
+                        $expired = true;
+                    }
+                }
+                if ($expired) {
+                    throw new \Exception('EXPIRED_ACCESS_TOKEN');
+                }
+                throw new moodle_exception('failed_register', 'local_linkedinbadge', $response);
+            }
+
+            $response_data = json_decode($response, true);
+            $upload_url = $response_data['value']['uploadMechanism']['com.linkedin.digitalmedia.uploading.MediaUploadHttpRequest']['uploadUrl'];
+            $asset = $response_data['value']['asset'];
 
         // Step 2: Upload the image
         $image_content = file_get_contents($image_path);
@@ -261,11 +286,52 @@ function upload_image_to_linkedin($token, $image_path, $linkedin_person_id) {
 
         curl_close($ch);
 
-        if ($http_code !== 201) {
-            throw new moodle_exception('Failed to upload image');
+        }
+        if ($http_code !== 200) {
+            $response_data = json_decode($response, true);
+            // Detect expired access token error from LinkedIn and raise specific exception
+            $expired = false;
+            if ($http_code === 401) {
+                $expired = true;
+            }
+            if (!$expired && is_array($response_data)) {
+                if (!empty($response_data['serviceErrorCode']) && $response_data['serviceErrorCode'] == 65602) {
+                    $expired = true;
+                }
+                if (!empty($response_data['code']) && $response_data['code'] === 'EXPIRED_ACCESS_TOKEN') {
+                    $expired = true;
+                }
+            }
+            if ($expired) {
+                throw new \Exception('EXPIRED_ACCESS_TOKEN');
+            }
+            throw new moodle_exception('failed_register', 'local_linkedinbadge', $response);
         }
 
-        return $asset;
+        $response_data = json_decode($response, true);
+            curl_close($ch);
+
+            if ($http_code !== 201) {
+                $response_data = json_decode($response, true);
+                $expired = false;
+                if ($http_code === 401) {
+                    $expired = true;
+                }
+                if (!$expired && is_array($response_data)) {
+                    if (!empty($response_data['serviceErrorCode']) && $response_data['serviceErrorCode'] == 65602) {
+                        $expired = true;
+                    }
+                    if (!empty($response_data['code']) && $response_data['code'] === 'EXPIRED_ACCESS_TOKEN') {
+                        $expired = true;
+                    }
+                }
+                if ($expired) {
+                    throw new \Exception('EXPIRED_ACCESS_TOKEN');
+                }
+                throw new moodle_exception('failed_upload', 'local_linkedinbadge', $response);
+            }
+
+            $response_data = json_decode($response, true);
 
     } catch (Exception $e) {
         \local_linkedinbadge\logger::log('Upload error', [
@@ -281,15 +347,38 @@ try {
     $badgeid = required_param('badge', PARAM_INT);
     $message = required_param('message', PARAM_TEXT);
 
-    // Get badge details
-    $badge = $DB->get_record('badge', ['id' => $badgeid], '*', MUST_EXIST);
-    
+    // Log incoming request for debugging
+    \local_linkedinbadge\logger::log('post_badge request', [
+        'userid' => $USER->id,
+        'badgeid' => $badgeid,
+        'post_keys' => array_keys($_POST)
+    ]);
+
+    // Get badge details (do not use MUST_EXIST so we can give clearer errors)
+    $badge = $DB->get_record('badge', ['id' => $badgeid], '*', IGNORE_MISSING);
+    if (!$badge) {
+        \local_linkedinbadge\logger::log('Badge not found', ['badgeid' => $badgeid]);
+        echo '<div class="container">';
+        echo $OUTPUT->notification('Badge not found in database.', 'error');
+        echo '<div class="mt-3">';
+        echo '<a href="' . new moodle_url('/badges/mybadges.php') . '" class="btn btn-secondary">' . get_string('return_to_badges', 'local_linkedinbadge') . '</a>';
+        echo '</div></div>';
+        echo $OUTPUT->footer();
+        exit;
+    }
+
     // Verify badge is issued to user
-    $issued = $DB->get_record('badge_issued',
-        ['badgeid' => $badgeid, 'userid' => $USER->id],
-        '*',
-        MUST_EXIST
-    );
+    $issued = $DB->get_record('badge_issued', ['badgeid' => $badgeid, 'userid' => $USER->id], '*', IGNORE_MISSING);
+    if (!$issued) {
+        \local_linkedinbadge\logger::log('Badge not issued to user', ['badgeid' => $badgeid, 'userid' => $USER->id]);
+        echo '<div class="container">';
+        echo $OUTPUT->notification('You have not been issued this badge.', 'error');
+        echo '<div class="mt-3">';
+        echo '<a href="' . new moodle_url('/badges/mybadges.php') . '" class="btn btn-secondary">' . get_string('return_to_badges', 'local_linkedinbadge') . '</a>';
+        echo '</div></div>';
+        echo $OUTPUT->footer();
+        exit;
+    }
 
     // Get badge image using the new method
     $image_file = get_badge_image_file($badge);
@@ -324,7 +413,23 @@ try {
     $linkedin_person_id = $id_token_payload['sub'];
 
     // Upload the image to LinkedIn
-    $image_urn = upload_image_to_linkedin($token->value, $processed_image['path'], $linkedin_person_id);
+    try {
+        $image_urn = upload_image_to_linkedin($token->value, $processed_image['path'], $linkedin_person_id);
+    } catch (\Exception $e) {
+        // If token expired, remove stored tokens and redirect user to connect flow.
+        if (stripos($e->getMessage(), 'EXPIRED') !== false) {
+            // remove saved tokens
+            $DB->delete_records('user_preferences', ['userid' => $USER->id, 'name' => 'local_linkedinbadge_linkedin_token']);
+            $DB->delete_records('user_preferences', ['userid' => $USER->id, 'name' => 'local_linkedinbadge_linkedin_id_token']);
+
+            // redirect to connect/authorize
+            $oauth = new \local_linkedinbadge\linkedin_oauth();
+            $auth_url = $oauth->get_auth_url();
+            redirect($auth_url, get_string('error:token_expired', 'local_linkedinbadge'), null, \core\output\notification::NOTIFY_WARNING);
+        }
+        // rethrow other exceptions to be handled below
+        throw $e;
+    }
 
     // Create the post with the image
     $post_data = [

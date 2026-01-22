@@ -13,7 +13,18 @@ class local_linkedinbadge_output_callback {
         // Only add button on badge pages
         if (strpos($PAGE->url->get_path(), '/badges/') !== false) {
             $badgeid = optional_param('id', 0, PARAM_INT);
-            
+
+            // Some badge pages use a 'hash' parameter instead of 'id'.
+            if (empty($badgeid)) {
+                $hash = optional_param('hash', '', PARAM_ALPHANUMEXT);
+                if ($hash) {
+                    $issuedrec = $DB->get_record('badge_issued', ['uniquehash' => $hash], 'id,badgeid', IGNORE_MISSING);
+                    if ($issuedrec) {
+                        $badgeid = (int)$issuedrec->badgeid;
+                    }
+                }
+            }
+
             if ($badgeid) {
                 // Check if user has this badge
                 $issued = $DB->record_exists('badge_issued', 
