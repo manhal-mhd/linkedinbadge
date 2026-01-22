@@ -110,6 +110,45 @@ try {
             $a->url = $CFG->wwwroot . '/badges/mybadges.php';
         }
         $default_message = get_string('default_share_message', 'local_linkedinbadge', $a);
+        // Fallback: if placeholders like {$a->url} remain, replace them from $a properties.
+        if (strpos($default_message, '{$a->') !== false) {
+            $default_message = preg_replace_callback('/\{\$a->([a-zA-Z0-9_]+)\}/', function($m) use ($a) {
+                $prop = $m[1];
+                return isset($a->$prop) ? $a->$prop : $m[0];
+            }, $default_message);
+        }
+
+        // If placeholders still remain (some languages or unparsed strings), build a safe fallback message.
+        if (strpos($default_message, '{$a->') !== false) {
+            $default_message = "I'm proud to announce that I have earned the {$a->badge} badge from {$a->site}! \n" .
+                "Check out my achievement here: {$a->url}\n" .
+                "{$a->description}";
+        }
+
+        // Inspect badge filearea to show best image dimensions to the user for debugging
+        try {
+            $fs = get_file_storage();
+            $ctx = !empty($badge->courseid) ? context_course::instance($badge->courseid) : context_system::instance();
+            $files = $fs->get_area_files($ctx->id, 'badges', 'badgeimage', $badge->id, 'id', false);
+            $bestdims = null;
+            foreach ($files as $f) {
+                if ($f->is_directory()) { continue; }
+                $tmp = tempnam(sys_get_temp_dir(), 'badge_');
+                if ($tmp && $f->copy_content_to($tmp)) {
+                    $info = @getimagesize($tmp);
+                    @unlink($tmp);
+                    if ($info) {
+                        $bestdims = $info[0] . 'x' . $info[1];
+                        break;
+                    }
+                }
+            }
+            if ($bestdims) {
+                echo "<p class='text-muted small'>Image available: " . s($bestdims) . " (best match)</p>";
+            }
+        } catch (Exception $e) {
+            // ignore image inspection errors
+        }
         
         echo "<div class='form-group'>";
         echo "<label for='message' class='form-label'>" . get_string('customize_message', 'local_linkedinbadge') . "</label>";

@@ -20,45 +20,75 @@ function get_badge_image_file($badge) {
         'badge_name' => $badge->name
     ]);
 
-    // Try both possible filenames
-    $filenames = ['f1', 'f1.png'];
-    
-    foreach ($filenames as $filename) {
-        $file = $fs->get_file(
-            $context->id,
-            'badges',
-            'badgeimage',
-            $badge->id,
-            '/',
-            $filename
-        );
-        
-        if ($file) {
-            // Create temporary file
-            $temp_path = tempnam(sys_get_temp_dir(), 'badge_');
-            if ($temp_path === false) {
-                throw new moodle_exception('Failed to create temporary file');
+    // Get all files in the badgeimage filearea for this badge and pick the largest (by pixels then filesize)
+    $files = $fs->get_area_files($context->id, 'badges', 'badgeimage', $badge->id, 'id', false);
+    $best = null;
+    $best_score = 0;
+
+    foreach ($files as $file) {
+        if ($file->is_directory()) {
+            continue;
+        }
+        // Copy to temp to inspect dimensions
+        $temp_path = tempnam(sys_get_temp_dir(), 'badge_');
+        if ($temp_path === false) {
+            continue;
+        }
+        if (!$file->copy_content_to($temp_path)) {
+            @unlink($temp_path);
+            continue;
+        }
+
+        $image_info = @getimagesize($temp_path);
+        $width = $image_info ? ($image_info[0] : 0) ;
+        $height = $image_info ? ($image_info[1] : 0) ;
+        $filesize = $file->get_filesize();
+
+        // Score by area first, then filesize
+        $score = ($width * $height) + intval($filesize / 1024);
+
+        \local_linkedinbadge\logger::log('Inspecting badge file', [
+            'filename' => $file->get_filename(),
+            'mime' => $file->get_mimetype(),
+            'width' => $width,
+            'height' => $height,
+            'filesize' => $filesize,
+            'score' => $score
+        ]);
+
+        if ($score > $best_score) {
+            // remove previous best temp file
+            if ($best && !empty($best['temp'])) {
+                @unlink($best['temp']);
             }
-
-            // Copy file content to temporary file
-            if (!$file->copy_content_to($temp_path)) {
-                unlink($temp_path);
-                throw new moodle_exception('Failed to copy badge image to temporary file');
-            }
-
-            \local_linkedinbadge\logger::log('Badge image found and copied', [
-                'temp_path' => $temp_path,
-                'original_filename' => $file->get_filename(),
-                'filesize' => $file->get_filesize(),
-                'mimetype' => $file->get_mimetype()
-            ]);
-
-            return [
-                'path' => $temp_path,
-                'type' => 'temp',
+            $best_score = $score;
+            $best = [
+                'file' => $file,
+                'temp' => $temp_path,
+                'width' => $width,
+                'height' => $height,
+                'filesize' => $filesize,
                 'mime' => $file->get_mimetype()
             ];
+        } else {
+            @unlink($temp_path);
         }
+    }
+
+    if ($best) {
+        \local_linkedinbadge\logger::log('Selected badge image', [
+            'filename' => $best['file']->get_filename(),
+            'mime' => $best['mime'],
+            'width' => $best['width'],
+            'height' => $best['height'],
+            'filesize' => $best['filesize']
+        ]);
+
+        return [
+            'path' => $best['temp'],
+            'type' => 'temp',
+            'mime' => $best['mime']
+        ];
     }
 
     // If we get here, we couldn't find the image
@@ -95,7 +125,7 @@ function validate_and_prepare_image($image_path) {
         'height' => $image_info[1]
     ]);
 
-    // Convert to JPEG if needed
+    // Convert to JPEG if needed. Preserve original dimensions and use high quality.
     if ($image_info['mime'] !== 'image/jpeg') {
         $temp_path = tempnam(sys_get_temp_dir(), 'badge_');
         
@@ -115,24 +145,19 @@ function validate_and_prepare_image($image_path) {
             throw new moodle_exception('Failed to load source image');
         }
 
-        // Create new image
+        // Preserve original size
         $width = imagesx($source);
         $height = imagesy($source);
         $new_image = imagecreatetruecolor($width, $height);
         
-        // Preserve transparency
-        imagealphablending($new_image, true);
-        imagesavealpha($new_image, true);
-        
-        // Fill with white background
+        // Preserve transparency by filling with white for JPEG
         $white = imagecolorallocate($new_image, 255, 255, 255);
         imagefilledrectangle($new_image, 0, 0, $width, $height, $white);
         
-        // Copy the original image
         imagecopy($new_image, $source, 0, 0, 0, 0, $width, $height);
         
-        // Save as JPEG
-        if (!imagejpeg($new_image, $temp_path, 90)) {
+        // Save as high-quality JPEG (95)
+        if (!imagejpeg($new_image, $temp_path, 95)) {
             imagedestroy($source);
             imagedestroy($new_image);
             unlink($temp_path);
@@ -144,7 +169,7 @@ function validate_and_prepare_image($image_path) {
 
         // Clean up original temp file if it was temporary
         if (strpos($image_path, sys_get_temp_dir()) === 0) {
-            unlink($image_path);
+            @unlink($image_path);
         }
 
         return [
@@ -412,6 +437,29 @@ try {
 
     $linkedin_person_id = $id_token_payload['sub'];
 
+    // Prepare the share message: decode entities and replace any {$a->...} placeholders
+    $message = html_entity_decode($message, ENT_QUOTES | ENT_HTML5);
+    if (strpos($message, '{$a->') !== false) {
+        global $SITE, $CFG;
+        $badge_name = format_string($badge->name);
+        $a = new stdClass();
+        $a->badge = $badge_name;
+        $a->site = format_string($SITE->fullname);
+        $a->description = format_string($badge->description);
+        if (!empty($issued) && !empty($issued->uniquehash)) {
+            $a->url = $CFG->wwwroot . '/badges/view.php?hash=' . $issued->uniquehash;
+        } else {
+            $a->url = $CFG->wwwroot . '/badges/mybadges.php';
+        }
+
+        $message = preg_replace_callback('/\{\$a->([a-zA-Z0-9_]+)\}/', function($m) use ($a) {
+            $prop = $m[1];
+            return isset($a->$prop) ? $a->$prop : $m[0];
+        }, $message);
+    }
+
+    // Log final prepared message for debugging
+    \local_linkedinbadge\logger::log('Prepared share message', ['userid' => $USER->id, 'badgeid' => $badgeid, 'message' => $message]);
     // Upload the image to LinkedIn
     try {
         $image_urn = upload_image_to_linkedin($token->value, $processed_image['path'], $linkedin_person_id);
