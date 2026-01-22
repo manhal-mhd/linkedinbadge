@@ -46,6 +46,9 @@ try {
         echo "</div>";
 
         $oauth = new \local_linkedinbadge\linkedin_oauth();
+        // Save current page (including badge param) so we can return after OAuth
+        global $SESSION;
+        $SESSION->linkedin_return = $PAGE->url->out(false);
         $auth_url = $oauth->get_auth_url();
         
         echo "<div class='mt-3'>";
@@ -94,11 +97,19 @@ try {
         // Default share message
         $site_name = format_string($SITE->fullname);
         $badge_name = format_string($badge->name);
-        $default_message = get_string('default_share_message', 'local_linkedinbadge', [
-            'badge' => $badge_name,
-            'site' => $site_name,
-            'description' => format_string($badge->description)
-        ]);
+        // Build $a as an object so language placeholders like {$a->url} work.
+        $a = new stdClass();
+        $a->badge = $badge_name;
+        $a->site = $site_name;
+        $a->description = format_string($badge->description);
+        // Prefer a badge-specific public URL using issued uniquehash if available.
+        global $CFG;
+        if (!empty($issued) && !empty($issued->uniquehash)) {
+            $a->url = $CFG->wwwroot . '/badges/view.php?hash=' . $issued->uniquehash;
+        } else {
+            $a->url = $CFG->wwwroot . '/badges/mybadges.php';
+        }
+        $default_message = get_string('default_share_message', 'local_linkedinbadge', $a);
         
         echo "<div class='form-group'>";
         echo "<label for='message' class='form-label'>" . get_string('customize_message', 'local_linkedinbadge') . "</label>";

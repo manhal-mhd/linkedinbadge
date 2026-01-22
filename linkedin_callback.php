@@ -44,8 +44,14 @@ try {
 
     if ($result) {
         \local_linkedinbadge\logger::log('LinkedIn Connection Successful');
+        // Redirect back to the page that initiated the OAuth flow (if set)
+        $returnurl = !empty($SESSION->linkedin_return) ? $SESSION->linkedin_return : '/badges/mybadges.php';
+        if (!empty($SESSION->linkedin_return)) {
+            unset($SESSION->linkedin_return);
+        }
+        $redirect = new moodle_url($returnurl);
         redirect(
-            new moodle_url('/local/linkedinbadge/post_badge.php'), // Update this line
+            $redirect,
             get_string('success:connection', 'local_linkedinbadge'),
             null,
             \core\output\notification::NOTIFY_SUCCESS
@@ -60,8 +66,12 @@ try {
         'error' => $e->getMessage(),
         'trace' => $e->getTraceAsString()
     ]);
+    $returnurl = !empty($SESSION->linkedin_return) ? $SESSION->linkedin_return : '/badges/mybadges.php';
+    if (!empty($SESSION->linkedin_return)) {
+        unset($SESSION->linkedin_return);
+    }
     redirect(
-        new moodle_url('/local/linkedinbadge/share_badge.php'), // Update this line
+        new moodle_url($returnurl),
         $e->getMessage(),
         null,
         \core\output\notification::NOTIFY_ERROR
@@ -71,8 +81,12 @@ try {
         'error' => $e->getMessage(),
         'trace' => $e->getTraceAsString()
     ]);
+    $returnurl = !empty($SESSION->linkedin_return) ? $SESSION->linkedin_return : '/badges/mybadges.php';
+    if (!empty($SESSION->linkedin_return)) {
+        unset($SESSION->linkedin_return);
+    }
     redirect(
-        new moodle_url('/local/linkedinbadge/share_badge.php'), // Update this line
+        new moodle_url($returnurl),
         get_string('error:unexpected', 'local_linkedinbadge', $e->getMessage()),
         null,
         \core\output\notification::NOTIFY_ERROR
