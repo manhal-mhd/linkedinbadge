@@ -146,15 +146,16 @@ function validate_and_prepare_image($image_path) {
             // create temp path with proper extension based on desired output format
             $ext = ($result['mime'] === 'image/png' || $result['mime'] === 'image/gif') ? '.png' : '.jpg';
             $tmp2 = tempnam(sys_get_temp_dir(), 'badge_up_') . $ext;
-            // upscale so largest side == 1200 (preserve aspect), apply Lanczos and unsharp
-            $resize = '1200x1200';
+            // target social card size
+            $target_w = 1200;
+            $target_h = 630;
             $srcarg = escapeshellarg($result['path']);
             $dstarg = escapeshellarg($tmp2);
-            // prefer PNG output for graphics (lossless) when source is PNG/GIF
+            // Use resize^ + extent to fill and center, then unsharp. Prefer PNG output for graphics.
             if ($ext === '.png') {
-                $cmd = "$convert $srcarg -filter Lanczos -resize $resize -strip -unsharp 0x1+0.75+0.02 $dstarg";
+                $cmd = "$convert $srcarg -filter Lanczos -resize {$target_w}x{$target_h}^ -gravity center -background white -extent {$target_w}x{$target_h} -strip -unsharp 0x1+0.75+0.02 $dstarg";
             } else {
-                $cmd = "$convert $srcarg -filter Lanczos -resize $resize -strip -unsharp 0x1+0.75+0.02 -quality 90 $dstarg";
+                $cmd = "$convert $srcarg -filter Lanczos -resize {$target_w}x{$target_h}^ -gravity center -background white -extent {$target_w}x{$target_h} -strip -unsharp 0x1+0.75+0.02 -quality 95 $dstarg";
             }
             @exec($cmd, $o, $r);
             if ($r === 0 && file_exists($tmp2) && filesize($tmp2) > 0) {
@@ -174,7 +175,10 @@ function validate_and_prepare_image($image_path) {
                 if ($srcinfo) {
                 $sw = $srcinfo[0];
                 $sh = $srcinfo[1];
-                $scale = max($min_side / $sw, $min_side / $sh);
+                // Fit inside target canvas while preserving aspect, then center on 1200x630 canvas
+                $target_w = 1200;
+                $target_h = 630;
+                $scale = min($target_w / $sw, $target_h / $sh);
                 $dw = (int)round($sw * $scale);
                 $dh = (int)round($sh * $scale);
                 // create source image depending on mime
@@ -190,17 +194,23 @@ function validate_and_prepare_image($image_path) {
                         break;
                 }
                 if ($srcimg) {
-                    $dst = imagecreatetruecolor($dw, $dh);
+                    // create final canvas and center the resized image
+                    $dst = imagecreatetruecolor($target_w, $target_h);
                     $white = imagecolorallocate($dst, 255,255,255);
-                    imagefilledrectangle($dst,0,0,$dw,$dh,$white);
-                    imagecopyresampled($dst, $srcimg, 0,0,0,0, $dw, $dh, $sw, $sh);
+                    imagefilledrectangle($dst,0,0,$target_w,$target_h,$white);
+                    $dst_resized = imagecreatetruecolor($dw, $dh);
+                    imagecopyresampled($dst_resized, $srcimg, 0,0,0,0, $dw, $dh, $sw, $sh);
+                    $dst_x = (int)(($target_w - $dw) / 2);
+                    $dst_y = (int)(($target_h - $dh) / 2);
+                    imagecopy($dst, $dst_resized, $dst_x, $dst_y, 0, 0, $dw, $dh);
+                    imagedestroy($dst_resized);
                     // choose output format to match source for best quality on graphics
                     $ext = ($result['mime'] === 'image/png' || $result['mime'] === 'image/gif') ? '.png' : '.jpg';
                     $tmp2 = tempnam(sys_get_temp_dir(), 'badge_up_') . $ext;
                     if ($ext === '.png') {
                         imagepng($dst, $tmp2, 6);
                     } else {
-                        imagejpeg($dst, $tmp2, 90);
+                        imagejpeg($dst, $tmp2, 95);
                     }
                     imagedestroy($dst);
                     imagedestroy($srcimg);
@@ -226,6 +236,17 @@ require_once('../../config.php');
 require_once($CFG->libdir . '/badgeslib.php');
 require_login();
 
+// Bootstrap diagnostic: unique run id and environment to help correlate log entries
+$__linkedin_runid = uniqid('linkpost_', true);
+\local_linkedinbadge\logger::log('script_start', [
+    'runid' => $__linkedin_runid,
+    'file' => __FILE__,
+    'file_mtime' => @filemtime(__FILE__),
+    'php_sapi' => php_sapi_name(),
+    'pid' => getmypid(),
+    'time' => time()
+]);
+
 global $DB, $USER, $OUTPUT, $PAGE;
 
 $PAGE->set_context(context_system::instance());
@@ -241,6 +262,20 @@ echo $OUTPUT->header();
 
 function upload_image_to_linkedin($token, $image_path, $linkedin_person_id, $mime = 'image/jpeg') {
     try {
+        // Immediate diagnostic: log the image path we received, its size and hash to confirm
+        $real = @realpath($image_path);
+        $exists = file_exists($image_path);
+        $size = $exists ? @filesize($image_path) : 0;
+        $md5 = $exists ? @md5_file($image_path) : null;
+        \local_linkedinbadge\logger::log('upload_called', [
+            'image_path' => $image_path,
+            'realpath' => $real,
+            'exists' => $exists,
+            'size' => $size,
+            'md5' => $md5,
+            'mime_hint' => $mime
+        ]);
+
         // Step 1: Register the image upload with LinkedIn
         $register_url = 'https://api.linkedin.com/v2/assets?action=registerUpload';
         $post_data = [
