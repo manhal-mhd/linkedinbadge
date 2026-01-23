@@ -540,11 +540,9 @@ try {
         throw $e;
     }
 
-    // Create the post with the image
-    // Prefer posting a link (ARTICLE) to the public credential page so LinkedIn creates a rich link preview card.
+    // Create the post as an ARTICLE (link) pointing to the public credential page so
+    // LinkedIn uses the OG metadata and displays the same preview shown in Post Inspector.
     if (!empty($issued) && !empty($issued->uniquehash)) {
-        // Use the public credential page URL so replacements point to the same page
-        // LinkedIn will be asked to fetch. Include a cache-busting timestamp.
         $credential_url = $CFG->wwwroot . '/local/linkedinbadge/credential.php?hash=' . $issued->uniquehash . '&v=' . time();
     } else {
         $credential_url = $CFG->wwwroot . '/badges/mybadges.php';
@@ -555,38 +553,13 @@ try {
         'lifecycleState' => 'PUBLISHED',
         'specificContent' => [
             'com.linkedin.ugc.ShareContent' => [
-                'shareCommentary' => [
-                    'text' => $message
-                ],
+                'shareCommentary' => [ 'text' => $message ],
                 'shareMediaCategory' => 'ARTICLE',
                 'media' => [
                     [
                         'status' => 'READY',
                         'description' => [ 'text' => format_string($badge->description) ],
                         'originalUrl' => $credential_url,
-                        'title' => [ 'text' => format_string($badge->name) ]
-                    ]
-                ]
-            ]
-        ],
-        'visibility' => [
-            'com.linkedin.ugc.MemberNetworkVisibility' => 'PUBLIC'
-        ]
-    ];
-    // Create the post with the uploaded image asset. Use IMAGE share so LinkedIn
-    // uses the uploaded asset (preserving quality) instead of scraping the OG image.
-    $post_data = [
-        'author' => 'urn:li:person:' . $linkedin_person_id,
-        'lifecycleState' => 'PUBLISHED',
-        'specificContent' => [
-            'com.linkedin.ugc.ShareContent' => [
-                'shareCommentary' => [ 'text' => $message ],
-                'shareMediaCategory' => 'IMAGE',
-                'media' => [
-                    [
-                        'status' => 'READY',
-                        'description' => [ 'text' => format_string($badge->description) ],
-                        'media' => $image_urn,
                         'title' => [ 'text' => format_string($badge->name) ]
                     ]
                 ]
