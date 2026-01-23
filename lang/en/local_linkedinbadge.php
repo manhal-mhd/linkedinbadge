@@ -55,6 +55,11 @@ $string['cancel'] = 'Cancel';
 //$string['share_linkedin'] = 'Share on LinkedIn';
 $string['share_on_linkedin'] = 'Share on LinkedIn';
 
+// Credential helper strings
+$string['show_credential'] = 'Show credential';
+$string['credential_id'] = 'Credential ID';
+$string['credential_help'] = 'Use this ID and the credential link to add the certificate under Licenses & certifications on LinkedIn.';
+
 // Admin interface
 $string['manage_connections'] = 'Manage LinkedIn Connections';
 $string['settings_saved'] = 'LinkedIn settings saved successfully';

@@ -125,66 +125,101 @@ function validate_and_prepare_image($image_path) {
         'height' => $image_info[1]
     ]);
 
-    // Convert to JPEG if needed. Preserve original dimensions and use high quality.
-    if ($image_info['mime'] !== 'image/jpeg') {
-        $temp_path = tempnam(sys_get_temp_dir(), 'badge_');
-        
-        // Create source image based on type
-        switch ($image_info['mime']) {
-            case 'image/png':
-                $source = imagecreatefrompng($image_path);
-                break;
-            case 'image/gif':
-                $source = imagecreatefromgif($image_path);
-                break;
-            default:
-                throw new moodle_exception('Unsupported image type: ' . $image_info['mime']);
-        }
-
-        if (!$source) {
-            throw new moodle_exception('Failed to load source image');
-        }
-
-        // Preserve original size
-        $width = imagesx($source);
-        $height = imagesy($source);
-        $new_image = imagecreatetruecolor($width, $height);
-        
-        // Preserve transparency by filling with white for JPEG
-        $white = imagecolorallocate($new_image, 255, 255, 255);
-        imagefilledrectangle($new_image, 0, 0, $width, $height, $white);
-        
-        imagecopy($new_image, $source, 0, 0, 0, 0, $width, $height);
-        
-        // Save as high-quality JPEG (95)
-        if (!imagejpeg($new_image, $temp_path, 95)) {
-            imagedestroy($source);
-            imagedestroy($new_image);
-            unlink($temp_path);
-            throw new moodle_exception('Failed to convert image to JPEG');
-        }
-
-        imagedestroy($source);
-        imagedestroy($new_image);
-
-        // Clean up original temp file if it was temporary
-        if (strpos($image_path, sys_get_temp_dir()) === 0) {
-            @unlink($image_path);
-        }
-
-        return [
-            'path' => $temp_path,
-            'mime' => 'image/jpeg',
-            'is_temp' => true
-        ];
-    }
-
-    // If already JPEG, return original
-    return [
+    // Start with the original file and mime; we'll upscale/convert later if needed.
+    $result = [
         'path' => $image_path,
-        'mime' => 'image/jpeg',
+        'mime' => $image_info['mime'],
         'is_temp' => strpos($image_path, sys_get_temp_dir()) === 0
     ];
+
+    // Optionally upscale small images to improve social preview quality.
+    // Use ImageMagick `convert` when available for high-quality Lanczos resampling
+    // followed by an unsharp mask. Fall back to GD upscaling otherwise.
+    $min_side = 600; // minimum target dimension (px)
+    $info = @getimagesize($result['path']);
+    if ($info && ($info[0] < $min_side || $info[1] < $min_side)) {
+        // check for ImageMagick
+        @exec('command -v convert', $out, $rc);
+        \local_linkedinbadge\logger::log('convert availability', ['out' => $out, 'rc' => $rc]);
+        if ($rc === 0 && !empty($out[0])) {
+            $convert = $out[0];
+            // create temp path with proper extension based on desired output format
+            $ext = ($result['mime'] === 'image/png' || $result['mime'] === 'image/gif') ? '.png' : '.jpg';
+            $tmp2 = tempnam(sys_get_temp_dir(), 'badge_up_') . $ext;
+            // upscale so largest side == 1200 (preserve aspect), apply Lanczos and unsharp
+            $resize = '1200x1200';
+            $srcarg = escapeshellarg($result['path']);
+            $dstarg = escapeshellarg($tmp2);
+            // prefer PNG output for graphics (lossless) when source is PNG/GIF
+            if ($ext === '.png') {
+                $cmd = "$convert $srcarg -filter Lanczos -resize $resize -strip -unsharp 0x1+0.75+0.02 $dstarg";
+            } else {
+                $cmd = "$convert $srcarg -filter Lanczos -resize $resize -strip -unsharp 0x1+0.75+0.02 -quality 90 $dstarg";
+            }
+            @exec($cmd, $o, $r);
+            if ($r === 0 && file_exists($tmp2) && filesize($tmp2) > 0) {
+                // replace
+                if ($result['is_temp'] && file_exists($result['path'])) {
+                    @unlink($result['path']);
+                }
+                $result['path'] = $tmp2;
+                $result['is_temp'] = true;
+                $result['mime'] = ($ext === '.png') ? 'image/png' : 'image/jpeg';
+            } else {
+                @unlink($tmp2);
+            }
+        } else {
+            // GD fallback: upscale preserving aspect ratio
+            $srcinfo = @getimagesize($result['path']);
+                if ($srcinfo) {
+                $sw = $srcinfo[0];
+                $sh = $srcinfo[1];
+                $scale = max($min_side / $sw, $min_side / $sh);
+                $dw = (int)round($sw * $scale);
+                $dh = (int)round($sh * $scale);
+                // create source image depending on mime
+                switch ($result['mime']) {
+                    case 'image/png':
+                        $srcimg = imagecreatefrompng($result['path']);
+                        break;
+                    case 'image/gif':
+                        $srcimg = imagecreatefromgif($result['path']);
+                        break;
+                    default:
+                        $srcimg = imagecreatefromjpeg($result['path']);
+                        break;
+                }
+                if ($srcimg) {
+                    $dst = imagecreatetruecolor($dw, $dh);
+                    $white = imagecolorallocate($dst, 255,255,255);
+                    imagefilledrectangle($dst,0,0,$dw,$dh,$white);
+                    imagecopyresampled($dst, $srcimg, 0,0,0,0, $dw, $dh, $sw, $sh);
+                    // choose output format to match source for best quality on graphics
+                    $ext = ($result['mime'] === 'image/png' || $result['mime'] === 'image/gif') ? '.png' : '.jpg';
+                    $tmp2 = tempnam(sys_get_temp_dir(), 'badge_up_') . $ext;
+                    if ($ext === '.png') {
+                        imagepng($dst, $tmp2, 6);
+                    } else {
+                        imagejpeg($dst, $tmp2, 90);
+                    }
+                    imagedestroy($dst);
+                    imagedestroy($srcimg);
+                    if (file_exists($tmp2) && filesize($tmp2) > 0) {
+                        if ($result['is_temp'] && file_exists($result['path'])) {
+                            @unlink($result['path']);
+                        }
+                        $result['path'] = $tmp2;
+                        $result['is_temp'] = true;
+                        $result['mime'] = ($ext === '.png') ? 'image/png' : 'image/jpeg';
+                    } else {
+                        @unlink($tmp2);
+                    }
+                }
+            }
+        }
+    }
+
+    return $result;
 }
 
 require_once('../../config.php');
@@ -204,9 +239,9 @@ debugging('', DEBUG_DEVELOPER);
 
 echo $OUTPUT->header();
 
-function upload_image_to_linkedin($token, $image_path, $linkedin_person_id) {
+function upload_image_to_linkedin($token, $image_path, $linkedin_person_id, $mime = 'image/jpeg') {
     try {
-        // Step 1: Register the image upload
+        // Step 1: Register the image upload with LinkedIn
         $register_url = 'https://api.linkedin.com/v2/assets?action=registerUpload';
         $post_data = [
             'registerUploadRequest' => [
@@ -232,94 +267,27 @@ function upload_image_to_linkedin($token, $image_path, $linkedin_person_id) {
                 'X-Restli-Protocol-Version: 2.0.0'
             ],
             CURLOPT_SSL_VERIFYPEER => true,
-            CURLOPT_TIMEOUT => 30
+            CURLOPT_TIMEOUT => 60
         ]);
 
         $response = curl_exec($ch);
         $http_code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
         $curl_error = curl_error($ch);
+        curl_close($ch);
 
-        \local_linkedinbadge\logger::log('Register upload response', [
+        \local_linkedinbadge\logger::log('register_upload_response', [
             'http_code' => $http_code,
             'response' => $response,
             'curl_error' => $curl_error
         ]);
 
-        curl_close($ch);
-
-        if ($http_code !== 200) {
-            throw new moodle_exception('Failed to register upload: ' . $response);
-        }
-
-        $response_data = json_decode($response, true);
-        $upload_url = $response_data['value']['uploadMechanism']['com.linkedin.digitalmedia.uploading.MediaUploadHttpRequest']['uploadUrl'];
-        $asset = $response_data['value']['asset'];
-            curl_close($ch);
-
-            if ($http_code !== 200) {
-                $response_data = json_decode($response, true);
-                $expired = false;
-                if ($http_code === 401) {
-                    $expired = true;
-                }
-                if (!$expired && is_array($response_data)) {
-                    if (!empty($response_data['serviceErrorCode']) && $response_data['serviceErrorCode'] == 65602) {
-                        $expired = true;
-                    }
-                    if (!empty($response_data['code']) && $response_data['code'] === 'EXPIRED_ACCESS_TOKEN') {
-                        $expired = true;
-                    }
-                }
-                if ($expired) {
-                    throw new \Exception('EXPIRED_ACCESS_TOKEN');
-                }
-                throw new moodle_exception('failed_register', 'local_linkedinbadge', $response);
-            }
-
+        if ($http_code < 200 || $http_code >= 300) {
             $response_data = json_decode($response, true);
-            $upload_url = $response_data['value']['uploadMechanism']['com.linkedin.digitalmedia.uploading.MediaUploadHttpRequest']['uploadUrl'];
-            $asset = $response_data['value']['asset'];
-
-        // Step 2: Upload the image
-        $image_content = file_get_contents($image_path);
-        if ($image_content === false) {
-            throw new moodle_exception('Failed to read image content');
-        }
-
-        $ch = curl_init($upload_url);
-        curl_setopt_array($ch, [
-            CURLOPT_CUSTOMREQUEST => 'PUT',
-            CURLOPT_POSTFIELDS => $image_content,
-            CURLOPT_RETURNTRANSFER => true,
-            CURLOPT_HTTPHEADER => [
-                'Authorization: Bearer ' . $token,
-                'Content-Type: image/jpeg',
-                'Content-Length: ' . strlen($image_content)
-            ],
-            CURLOPT_SSL_VERIFYPEER => true,
-            CURLOPT_TIMEOUT => 30
-        ]);
-
-        $response = curl_exec($ch);
-        $http_code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-
-        \local_linkedinbadge\logger::log('Image upload response', [
-            'http_code' => $http_code,
-            'response' => $response,
-            'curl_error' => curl_error($ch)
-        ]);
-
-        curl_close($ch);
-
-        }
-        if ($http_code !== 200) {
-            $response_data = json_decode($response, true);
-            // Detect expired access token error from LinkedIn and raise specific exception
             $expired = false;
             if ($http_code === 401) {
                 $expired = true;
             }
-            if (!$expired && is_array($response_data)) {
+            if (is_array($response_data)) {
                 if (!empty($response_data['serviceErrorCode']) && $response_data['serviceErrorCode'] == 65602) {
                     $expired = true;
                 }
@@ -334,29 +302,72 @@ function upload_image_to_linkedin($token, $image_path, $linkedin_person_id) {
         }
 
         $response_data = json_decode($response, true);
-            curl_close($ch);
+        if (empty($response_data['value']['uploadMechanism']['com.linkedin.digitalmedia.uploading.MediaUploadHttpRequest']['uploadUrl']) || empty($response_data['value']['asset'])) {
+            throw new moodle_exception('failed_register', 'local_linkedinbadge', $response);
+        }
 
-            if ($http_code !== 201) {
-                $response_data = json_decode($response, true);
-                $expired = false;
-                if ($http_code === 401) {
+        $upload_url = $response_data['value']['uploadMechanism']['com.linkedin.digitalmedia.uploading.MediaUploadHttpRequest']['uploadUrl'];
+        $asset = $response_data['value']['asset'];
+
+        // Step 2: Upload the image bytes to the provided upload URL.
+        // NOTE: The uploadUrl is typically a pre-signed URL and must NOT include the Authorization header.
+        $image_content = @file_get_contents($image_path);
+        if ($image_content === false) {
+            throw new moodle_exception('Failed to read image content');
+        }
+        // Log actual upload byte length for debugging (what we will PUT)
+        \local_linkedinbadge\logger::log('Image upload preparing', [
+            'path' => $image_path,
+            'content_length' => strlen($image_content),
+            'mime' => $mime
+        ]);
+
+        $ch = curl_init($upload_url);
+        curl_setopt_array($ch, [
+            CURLOPT_CUSTOMREQUEST => 'PUT',
+            CURLOPT_POSTFIELDS => $image_content,
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_HTTPHEADER => [
+                'Content-Type: ' . $mime,
+                'Content-Length: ' . strlen($image_content)
+            ],
+            CURLOPT_SSL_VERIFYPEER => true,
+            CURLOPT_TIMEOUT => 60
+        ]);
+
+        $response = curl_exec($ch);
+        $http_code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        $curl_error = curl_error($ch);
+        curl_close($ch);
+
+        \local_linkedinbadge\logger::log('image_upload_response', [
+            'http_code' => $http_code,
+            'response' => $response,
+            'curl_error' => $curl_error
+        ]);
+
+        if ($http_code < 200 || $http_code >= 300) {
+            $response_data = json_decode($response, true);
+            $expired = false;
+            if ($http_code === 401) {
+                $expired = true;
+            }
+            if (is_array($response_data)) {
+                if (!empty($response_data['serviceErrorCode']) && $response_data['serviceErrorCode'] == 65602) {
                     $expired = true;
                 }
-                if (!$expired && is_array($response_data)) {
-                    if (!empty($response_data['serviceErrorCode']) && $response_data['serviceErrorCode'] == 65602) {
-                        $expired = true;
-                    }
-                    if (!empty($response_data['code']) && $response_data['code'] === 'EXPIRED_ACCESS_TOKEN') {
-                        $expired = true;
-                    }
+                if (!empty($response_data['code']) && $response_data['code'] === 'EXPIRED_ACCESS_TOKEN') {
+                    $expired = true;
                 }
-                if ($expired) {
-                    throw new \Exception('EXPIRED_ACCESS_TOKEN');
-                }
-                throw new moodle_exception('failed_upload', 'local_linkedinbadge', $response);
             }
+            if ($expired) {
+                throw new \Exception('EXPIRED_ACCESS_TOKEN');
+            }
+            throw new moodle_exception('failed_upload', 'local_linkedinbadge', $response ?: $curl_error);
+        }
 
-            $response_data = json_decode($response, true);
+        // Successful upload — return the asset URN to be used in the post payload.
+        return $asset;
 
     } catch (Exception $e) {
         \local_linkedinbadge\logger::log('Upload error', [
@@ -370,7 +381,8 @@ try {
     require_sesskey();
     
     $badgeid = required_param('badge', PARAM_INT);
-    $message = required_param('message', PARAM_TEXT);
+    // Accept the raw trimmed message so placeholders and user formatting survive until we sanitize for the API
+    $message = required_param('message', PARAM_RAW_TRIMMED);
 
     // Log incoming request for debugging
     \local_linkedinbadge\logger::log('post_badge request', [
@@ -446,8 +458,11 @@ try {
         $a->badge = $badge_name;
         $a->site = format_string($SITE->fullname);
         $a->description = format_string($badge->description);
+        // Use the public credential page URL so replacements point to the same page
+        // LinkedIn will be asked to fetch. Include a cache-busting timestamp.
         if (!empty($issued) && !empty($issued->uniquehash)) {
-            $a->url = $CFG->wwwroot . '/badges/view.php?hash=' . $issued->uniquehash;
+            $v_for_message = time();
+            $a->url = $CFG->wwwroot . '/local/linkedinbadge/credential.php?hash=' . $issued->uniquehash . '&v=' . $v_for_message;
         } else {
             $a->url = $CFG->wwwroot . '/badges/mybadges.php';
         }
@@ -456,13 +471,24 @@ try {
             $prop = $m[1];
             return isset($a->$prop) ? $a->$prop : $m[0];
         }, $message);
+        // If {$a->url} remains unreplaced for any reason, fall back to the credential URL.
+        if (strpos($message, '{$a->url}') !== false && !empty($a->url)) {
+            $message = str_replace('{$a->url}', $a->url, $message);
+        }
     }
 
     // Log final prepared message for debugging
     \local_linkedinbadge\logger::log('Prepared share message', ['userid' => $USER->id, 'badgeid' => $badgeid, 'message' => $message]);
     // Upload the image to LinkedIn
     try {
-        $image_urn = upload_image_to_linkedin($token->value, $processed_image['path'], $linkedin_person_id);
+        // Log processed image details before upload (path, size, mime)
+        $proc_size = file_exists($processed_image['path']) ? filesize($processed_image['path']) : 0;
+        \local_linkedinbadge\logger::log('Prepared image for upload', [
+            'path' => $processed_image['path'],
+            'mime' => $processed_image['mime'],
+            'filesize' => $proc_size
+        ]);
+        $image_urn = upload_image_to_linkedin($token->value, $processed_image['path'], $linkedin_person_id, $processed_image['mime']);
     } catch (\Exception $e) {
         // If token expired, remove stored tokens and redirect user to connect flow.
         if (stripos($e->getMessage(), 'EXPIRED') !== false) {
@@ -480,6 +506,15 @@ try {
     }
 
     // Create the post with the image
+    // Prefer posting a link (ARTICLE) to the public credential page so LinkedIn creates a rich link preview card.
+    if (!empty($issued) && !empty($issued->uniquehash)) {
+        // Use the public credential page URL so replacements point to the same page
+        // LinkedIn will be asked to fetch. Include a cache-busting timestamp.
+        $credential_url = $CFG->wwwroot . '/local/linkedinbadge/credential.php?hash=' . $issued->uniquehash . '&v=' . time();
+    } else {
+        $credential_url = $CFG->wwwroot . '/badges/mybadges.php';
+    }
+
     $post_data = [
         'author' => 'urn:li:person:' . $linkedin_person_id,
         'lifecycleState' => 'PUBLISHED',
@@ -488,17 +523,13 @@ try {
                 'shareCommentary' => [
                     'text' => $message
                 ],
-                'shareMediaCategory' => 'IMAGE',
+                'shareMediaCategory' => 'ARTICLE',
                 'media' => [
                     [
                         'status' => 'READY',
-                        'description' => [
-                            'text' => 'Badge Image'
-                        ],
-                        'media' => $image_urn,
-                        'title' => [
-                            'text' => $badge->name
-                        ]
+                        'description' => [ 'text' => format_string($badge->description) ],
+                        'originalUrl' => $credential_url,
+                        'title' => [ 'text' => format_string($badge->name) ]
                     ]
                 ]
             ]
@@ -506,6 +537,27 @@ try {
         'visibility' => [
             'com.linkedin.ugc.MemberNetworkVisibility' => 'PUBLIC'
         ]
+    ];
+    // Create the post with the uploaded image asset. Use IMAGE share so LinkedIn
+    // uses the uploaded asset (preserving quality) instead of scraping the OG image.
+    $post_data = [
+        'author' => 'urn:li:person:' . $linkedin_person_id,
+        'lifecycleState' => 'PUBLISHED',
+        'specificContent' => [
+            'com.linkedin.ugc.ShareContent' => [
+                'shareCommentary' => [ 'text' => $message ],
+                'shareMediaCategory' => 'IMAGE',
+                'media' => [
+                    [
+                        'status' => 'READY',
+                        'description' => [ 'text' => format_string($badge->description) ],
+                        'media' => $image_urn,
+                        'title' => [ 'text' => format_string($badge->name) ]
+                    ]
+                ]
+            ]
+        ],
+        'visibility' => [ 'com.linkedin.ugc.MemberNetworkVisibility' => 'PUBLIC' ]
     ];
 
     // Initialize cURL session for post creation
@@ -525,7 +577,16 @@ try {
 
     $response = curl_exec($ch);
     $http_code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    $curl_error = curl_error($ch);
     curl_close($ch);
+
+    // Log the UGC post response for debugging
+    \local_linkedinbadge\logger::log('ugc_post_response', [
+        'http_code' => $http_code,
+        'response' => $response,
+        'curl_error' => $curl_error,
+        'post_payload' => substr(json_encode($post_data), 0, 2000)
+    ]);
 
     echo '<div class="container">';
 

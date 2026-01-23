@@ -69,17 +69,64 @@ try {
         // Badge title
         echo "<h3 class='card-title'>" . get_string('share_badge', 'local_linkedinbadge', format_string($badge->name)) . "</h3>";
         
-        // Get badge image URL using correct method
-        $context = context_system::instance();
-        $image_url = moodle_url::make_pluginfile_url(
-            $context->id,
-            'badges',
-            'badgeimage',
-            $badge->id,
-            '/',
-            'f1',
-            false
-        );
+        // Get the best badge image file from file storage and build a pluginfile URL
+        try {
+            $fs = get_file_storage();
+            $ctx = !empty($badge->courseid) ? context_course::instance($badge->courseid) : context_system::instance();
+            $files = $fs->get_area_files($ctx->id, 'badges', 'badgeimage', $badge->id, 'id', false);
+            $bestfile = null;
+            $bestscore = 0;
+            foreach ($files as $f) {
+                if ($f->is_directory()) { continue; }
+                $tmp = tempnam(sys_get_temp_dir(), 'badge_');
+                if ($tmp && $f->copy_content_to($tmp)) {
+                    $info = @getimagesize($tmp);
+                    @unlink($tmp);
+                    $score = 0;
+                    if ($info) {
+                        $score = ($info[0] * $info[1]);
+                    } else {
+                        $score = $f->get_filesize();
+                    }
+                    if ($score > $bestscore) {
+                        $bestscore = $score;
+                        $bestfile = $f;
+                    }
+                }
+            }
+            if ($bestfile) {
+                $image_url = moodle_url::make_pluginfile_url(
+                    $ctx->id,
+                    'badges',
+                    'badgeimage',
+                    $badge->id,
+                    '/',
+                    $bestfile->get_filename(),
+                    false
+                );
+            } else {
+                // fallback to system file url if none found
+                $image_url = moodle_url::make_pluginfile_url(
+                    context_system::instance()->id,
+                    'badges',
+                    'badgeimage',
+                    $badge->id,
+                    '/',
+                    'f1',
+                    false
+                );
+            }
+        } catch (Exception $e) {
+            $image_url = moodle_url::make_pluginfile_url(
+                context_system::instance()->id,
+                'badges',
+                'badgeimage',
+                $badge->id,
+                '/',
+                'f1',
+                false
+            );
+        }
         
         // Display badge preview
         echo "<div class='badge-preview text-center mb-4'>";
@@ -88,6 +135,23 @@ try {
         echo format_text($badge->description, FORMAT_HTML);
         echo "</div>";
         echo "</div>";
+
+        // Show credential link and ID so user can add it to their LinkedIn profile
+        if (!empty($issued) && !empty($issued->uniquehash)) {
+            $credential_url = $CFG->wwwroot . '/local/linkedinbadge/credential.php?hash=' . $issued->uniquehash;
+            $credential_id = (int)$issued->id;
+
+            echo "<div class='mb-3 d-flex align-items-center'>";
+            echo "<a href='" . $credential_url . "' target='_blank' class='btn btn-outline-secondary mr-3'>";
+            echo get_string('show_credential', 'local_linkedinbadge');
+            echo "</a>";
+
+            echo "<div>";
+            echo "<div><strong>" . get_string('credential_id', 'local_linkedinbadge') . ":</strong> " . s($credential_id) . "</div>";
+            echo "<small class='text-muted'>" . get_string('credential_help', 'local_linkedinbadge') . "</small>";
+            echo "</div>";
+            echo "</div>";
+        }
         
         // Share form
         echo "<form method='post' action='post_badge.php' class='mt-4'>";
@@ -153,7 +217,7 @@ try {
         echo "<div class='form-group'>";
         echo "<label for='message' class='form-label'>" . get_string('customize_message', 'local_linkedinbadge') . "</label>";
         echo "<textarea class='form-control' id='message' name='message' rows='4'>";
-        echo htmlspecialchars($default_message);
+        echo s($default_message);
         echo "</textarea>";
         echo "<small class='form-text text-muted'>" . get_string('customize_message_help', 'local_linkedinbadge') . "</small>";
         echo "</div>";
