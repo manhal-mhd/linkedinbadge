@@ -153,91 +153,31 @@ try {
             echo "</div>";
         }
         
-        // Share form
-        echo "<form method='post' action='post_badge.php' class='mt-4'>";
-        echo "<input type='hidden' name='badge' value='" . $badgeid . "'>";
+        // The form is now replaced by a button that triggers client-side sharing.
+        // The textarea is kept for copying the message.
+        $a = new stdClass();
+        $a->badge = format_string($badge->name);
+        $a->site = $SITE->fullname;
+        $a->url = $credential_url;
+        $default_message = get_string('default_share_message', 'local_linkedinbadge', $a);
+
+        echo "<form action='post_badge.php' method='post'>";
+        echo "<input type='hidden' name='badgeid' value='" . $badgeid . "'>";
         echo "<input type='hidden' name='sesskey' value='" . sesskey() . "'>";
         
-        // Default share message
-        $site_name = format_string($SITE->fullname);
-        $badge_name = format_string($badge->name);
-        // Build $a as an object so language placeholders like {$a->url} work.
-        $a = new stdClass();
-        $a->badge = $badge_name;
-        $a->site = $site_name;
-        $a->description = format_string($badge->description);
-        // Prefer a badge-specific public URL using issued uniquehash if available.
-        global $CFG;
-        if (!empty($issued) && !empty($issued->uniquehash)) {
-            $a->url = $CFG->wwwroot . '/badges/view.php?hash=' . $issued->uniquehash;
-        } else {
-            $a->url = $CFG->wwwroot . '/badges/mybadges.php';
-        }
-        $default_message = get_string('default_share_message', 'local_linkedinbadge', $a);
-        // Fallback: if placeholders like {$a->url} remain, replace them from $a properties.
-        if (strpos($default_message, '{$a->') !== false) {
-            $default_message = preg_replace_callback('/\{\$a->([a-zA-Z0-9_]+)\}/', function($m) use ($a) {
-                $prop = $m[1];
-                return isset($a->$prop) ? $a->$prop : $m[0];
-            }, $default_message);
-        }
-
-        // If placeholders still remain (some languages or unparsed strings), build a safe fallback message.
-        if (strpos($default_message, '{$a->') !== false) {
-            $default_message = "I'm proud to announce that I have earned the {$a->badge} badge from {$a->site}! \n" .
-                "Check out my achievement here: {$a->url}\n" .
-                "{$a->description}";
-        }
-
-        // Inspect badge filearea to show best image dimensions to the user for debugging
-        try {
-            $fs = get_file_storage();
-            $ctx = !empty($badge->courseid) ? context_course::instance($badge->courseid) : context_system::instance();
-            $files = $fs->get_area_files($ctx->id, 'badges', 'badgeimage', $badge->id, 'id', false);
-            $bestdims = null;
-            foreach ($files as $f) {
-                if ($f->is_directory()) { continue; }
-                $tmp = tempnam(sys_get_temp_dir(), 'badge_');
-                if ($tmp && $f->copy_content_to($tmp)) {
-                    $info = @getimagesize($tmp);
-                    @unlink($tmp);
-                    if ($info) {
-                        $bestdims = $info[0] . 'x' . $info[1];
-                        break;
-                    }
-                }
-            }
-            if ($bestdims) {
-                echo "<p class='text-muted small'>Image available: " . s($bestdims) . " (best match)</p>";
-            }
-        } catch (Exception $e) {
-            // ignore image inspection errors
-        }
-        
         echo "<div class='form-group'>";
-        echo "<label for='message' class='form-label'>" . get_string('customize_message', 'local_linkedinbadge') . "</label>";
-        echo "<textarea class='form-control' id='message' name='message' rows='4'>";
-        echo s($default_message);
-        echo "</textarea>";
-        echo "<small class='form-text text-muted'>" . get_string('customize_message_help', 'local_linkedinbadge') . "</small>";
+        echo "<label for='share_message'>" . get_string('share_message_label', 'local_linkedinbadge') . "</label>";
+        echo "<textarea name='message' id='share_message' class='form-control' rows='5'>" . s($default_message) . "</textarea>";
         echo "</div>";
-        
-        echo "<div class='mt-4'>";
-        echo "<button type='submit' class='btn btn-primary'>";
-        echo "<i class='fa fa-linkedin'></i> ";
-        echo get_string('share_on_linkedin', 'local_linkedinbadge');
-        echo "</button> ";
-        
-        echo "<a href='" . new moodle_url('/badges/mybadges.php') . "' class='btn btn-secondary'>";
-        echo get_string('cancel', 'moodle');
-        echo "</a>";
+
+        echo "<div class='mt-3'>";
+        echo "<button type='submit' class='btn btn-primary'><i class='fa fa-linkedin'></i> " . get_string('share_on_linkedin', 'local_linkedinbadge') . "</button>";
+        echo "<a href='" . new moodle_url('/badges/mybadges.php') . "' class='btn btn-secondary ml-2'>" . get_string('cancel', 'moodle') . "</a>";
         echo "</div>";
-        
         echo "</form>";
-        echo "</div>"; // card-body
-        echo "</div>"; // card
     }
-    echo "</div>"; // container
+    
+    echo "</div>"; // Close container
     
 } catch (Exception $e) {
     echo "<div class='container'>";
@@ -252,3 +192,28 @@ try {
 }
 
 echo $OUTPUT->footer(); 
+
+// Inline helper to copy share text before opening LinkedIn
+echo "<script>
+function copyMessageText(){
+    try{
+        var ta = document.getElementById('message');
+        if (!ta) return;
+        var text = ta.value || '';
+        var hint = document.getElementById('copy-hint');
+        if (text && navigator.clipboard && navigator.clipboard.writeText) {
+            navigator.clipboard.writeText(text).then(function(){
+                if (hint) hint.textContent = 'Text copied. Paste it in LinkedIn.';
+            }).catch(function(){
+                ta.select();
+                document.execCommand('copy');
+                if (hint) hint.textContent = 'Text copied. Paste it in LinkedIn.';
+            });
+        } else {
+            ta.select();
+            document.execCommand('copy');
+            if (hint) hint.textContent = 'Text copied. Paste it in LinkedIn.';
+        }
+    } catch(e) {}
+}
+</script>";

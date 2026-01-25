@@ -40,8 +40,8 @@ function get_badge_image_file($badge) {
         }
 
         $image_info = @getimagesize($temp_path);
-        $width = $image_info ? ($image_info[0] : 0) ;
-        $height = $image_info ? ($image_info[1] : 0) ;
+        $width = $image_info ? $image_info[0] : 0;
+        $height = $image_info ? $image_info[1] : 0;
         $filesize = $file->get_filesize();
 
         // Score by area first, then filesize
@@ -484,91 +484,63 @@ try {
 
     $linkedin_person_id = $id_token_payload['sub'];
 
-    // Prepare the share message: decode entities and replace any {$a->...} placeholders
-    $message = html_entity_decode($message, ENT_QUOTES | ENT_HTML5);
-    if (strpos($message, '{$a->') !== false) {
-        global $SITE, $CFG;
-        $badge_name = format_string($badge->name);
-        $a = new stdClass();
-        $a->badge = $badge_name;
-        $a->site = format_string($SITE->fullname);
-        $a->description = format_string($badge->description);
-        // Use the public credential page URL so replacements point to the same page
-        // LinkedIn will be asked to fetch. Include a cache-busting timestamp.
-        if (!empty($issued) && !empty($issued->uniquehash)) {
-            $v_for_message = time();
-            $a->url = $CFG->wwwroot . '/local/linkedinbadge/credential.php?hash=' . $issued->uniquehash . '&v=' . $v_for_message;
-        } else {
-            $a->url = $CFG->wwwroot . '/badges/mybadges.php';
-        }
-
-        $message = preg_replace_callback('/\{\$a->([a-zA-Z0-9_]+)\}/', function($m) use ($a) {
-            $prop = $m[1];
-            return isset($a->$prop) ? $a->$prop : $m[0];
-        }, $message);
-        // If {$a->url} remains unreplaced for any reason, fall back to the credential URL.
-        if (strpos($message, '{$a->url}') !== false && !empty($a->url)) {
-            $message = str_replace('{$a->url}', $a->url, $message);
-        }
-    }
-
-    // Log final prepared message for debugging
-    \local_linkedinbadge\logger::log('Prepared share message', ['userid' => $USER->id, 'badgeid' => $badgeid, 'message' => $message]);
-    // Upload the image to LinkedIn
-    try {
-        // Log processed image details before upload (path, size, mime)
-        $proc_size = file_exists($processed_image['path']) ? filesize($processed_image['path']) : 0;
-        \local_linkedinbadge\logger::log('Prepared image for upload', [
-            'path' => $processed_image['path'],
-            'mime' => $processed_image['mime'],
-            'filesize' => $proc_size
-        ]);
-        $image_urn = upload_image_to_linkedin($token->value, $processed_image['path'], $linkedin_person_id, $processed_image['mime']);
-    } catch (\Exception $e) {
-        // If token expired, remove stored tokens and redirect user to connect flow.
-        if (stripos($e->getMessage(), 'EXPIRED') !== false) {
-            // remove saved tokens
-            $DB->delete_records('user_preferences', ['userid' => $USER->id, 'name' => 'local_linkedinbadge_linkedin_token']);
-            $DB->delete_records('user_preferences', ['userid' => $USER->id, 'name' => 'local_linkedinbadge_linkedin_id_token']);
-
-            // redirect to connect/authorize
-            $oauth = new \local_linkedinbadge\linkedin_oauth();
-            $auth_url = $oauth->get_auth_url();
-            redirect($auth_url, get_string('error:token_expired', 'local_linkedinbadge'), null, \core\output\notification::NOTIFY_WARNING);
-        }
-        // rethrow other exceptions to be handled below
-        throw $e;
-    }
-
-    // Create the post as an ARTICLE (link) pointing to the public credential page so
-    // LinkedIn uses the OG metadata and displays the same preview shown in Post Inspector.
+    // Prepare share URLs once so message and card use the exact same link
+    $v_share = time();
     if (!empty($issued) && !empty($issued->uniquehash)) {
-        $credential_url = $CFG->wwwroot . '/local/linkedinbadge/credential.php?hash=' . $issued->uniquehash . '&v=' . time();
+        $credential_url = $CFG->wwwroot . '/local/linkedinbadge/credential.php?hash=' . $issued->uniquehash . '&v=' . $v_share;
     } else {
         $credential_url = $CFG->wwwroot . '/badges/mybadges.php';
     }
 
+    // Prepare the share message: decode entities and replace any {$a->...} placeholders
+    $message = html_entity_decode($message, ENT_QUOTES | ENT_HTML5);
+    if (strpos($message, '{$a->') !== false) {
+        global $SITE, $CFG;
+        $a = new stdClass();
+        $a->badge = format_string($badge->name);
+        $a->site = $SITE->fullname;
+        $a->url = $credential_url; // Use the cache-busted URL
+        $message = get_string('default_share_message', 'local_linkedinbadge', $a);
+    }
+
+    // Upload the prepared image to LinkedIn and create an IMAGE post
+    \local_linkedinbadge\logger::log('image_post_start', [
+        'message_length' => strlen($message),
+        'processed_image' => isset($processed_image) ? $processed_image : null,
+    ]);
+
+    // Upload image bytes to LinkedIn to obtain an asset URN
+    $asset = upload_image_to_linkedin($token->value, $processed_image['path'], $linkedin_person_id, $processed_image['mime']);
+
+    \local_linkedinbadge\logger::log('image_upload_asset', ['asset' => $asset]);
+
+    // Prepare IMAGE post payload using the returned asset URN
     $post_data = [
-        'author' => 'urn:li:person:' . $linkedin_person_id,
-        'lifecycleState' => 'PUBLISHED',
-        'specificContent' => [
-            'com.linkedin.ugc.ShareContent' => [
-                'shareCommentary' => [ 'text' => $message ],
-                'shareMediaCategory' => 'ARTICLE',
-                'media' => [
+        "author" => "urn:li:person:" . $linkedin_person_id,
+        "lifecycleState" => "PUBLISHED",
+        "specificContent" => [
+            "com.linkedin.ugc.ShareContent" => [
+                "shareCommentary" => [
+                    "text" => $message
+                ],
+                "shareMediaCategory" => "IMAGE",
+                "media" => [
                     [
-                        'status' => 'READY',
-                        'description' => [ 'text' => format_string($badge->description) ],
-                        'originalUrl' => $credential_url,
-                        'title' => [ 'text' => format_string($badge->name) ]
+                        "status" => "READY",
+                        "media" => $asset
                     ]
                 ]
             ]
         ],
-        'visibility' => [ 'com.linkedin.ugc.MemberNetworkVisibility' => 'PUBLIC' ]
+        "visibility" => [
+            "com.linkedin.ugc.MemberNetworkVisibility" => "PUBLIC"
+        ]
     ];
 
-    // Initialize cURL session for post creation
+    // Log the final payload before sending
+    \local_linkedinbadge\logger::log('linkedin_image_post_payload', $post_data);
+
+    // Make the API call to post the image share
     $ch = curl_init('https://api.linkedin.com/v2/ugcPosts');
     curl_setopt_array($ch, [
         CURLOPT_POST => true,
@@ -589,7 +561,7 @@ try {
     curl_close($ch);
 
     // Log the UGC post response for debugging
-    \local_linkedinbadge\logger::log('ugc_post_response', [
+    \local_linkedinbadge\logger::log('ugc_image_post_response', [
         'http_code' => $http_code,
         'response' => $response,
         'curl_error' => $curl_error,
